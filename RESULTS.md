@@ -8,7 +8,8 @@ model id (and, when centered, a reference-mean id), so comparing mismatched mode
 means fails loudly rather than returning a plausible-looking number.
 
 **Datasets:** HackAPrompt (CC), JailbreakBench (MIT), HarmBench (MIT), WildJailbreak
-(AI2, ODC-BY). **Models:** `BAAI/bge-*`, `mixedbread-ai/mxbai-embed-large-v1`,
+(AI2, ODC-BY), AdvBench (Zou et al.), and the in-the-wild jailbreak corpus of Shen et al.
+(the last two used only in §2b). **Models:** `BAAI/bge-*`, `mixedbread-ai/mxbai-embed-large-v1`,
 `intfloat/multilingual-e5-large`, and the domain-tuned
 `0dinai/jailbreak-embeddings-base-onnx` (multilingual-e5 fine-tuned for jailbreak /
 prompt-injection duplicate detection). Runner: `fastembed` / `onnxruntime` (no torch).
@@ -17,6 +18,23 @@ prompt-injection duplicate detection). Runner: `fastembed` / `onnxruntime` (no t
 > digest this library emits **and** for the raw-embedding cosine ceiling. Hashing to a
 > 256-bit digest costs 11–21 points versus the ceiling, so the honest deployable number
 > is ~0.55–0.71. Don't quote the ceiling as the digest's performance.
+
+## Corrections log
+
+Changes to previously published figures or framing, newest first.
+
+- **2026-08-20 — §2 reframed; §2b added.** §2 was titled "Cross-org correlation, digests
+  only" and reported that the digest finds ~2.9x the overlap of exact matching. That number is
+  real but the label was wrong: A and B were random halves of a *single* high-redundancy
+  corpus (HackAPrompt), so they shared wording by construction. It measured the exact-vs-fuzzy
+  gap on closely-related material, not a cross-organisation rate. §2 is now titled and scoped
+  accordingly, and a genuine cross-feed measurement across five independent feeds — with
+  positive controls and a null baseline — is reported in §2b. Headline correction: **lexical
+  cross-feed correlation is ~0**, and the genuine cross-org semantic signal is ~10–21%, not
+  2.9x-of-anything.
+- **2026-08-18 — §1 near-duplicate slice figures.** Earlier ~32%/59% became 25%/35% (~1.8x)
+  after seeding the 40k sample (seed 42) and fixing CJK/unsegmented-script shingling in v0.3.1.
+  Full-set exact-duplicate rate (52.6%) was unaffected — it is a literal-string measure.
 
 ---
 
@@ -43,22 +61,92 @@ clusters — an overall **~1.8x** collapse. Real attack corpora carry substantia
 redundancy, so de-duplicating by digest materially cuts what an analyst reviews. Factor
 depends on the feed (HackAPrompt is a competition, so its redundancy is on the high side).
 
-## 2. Cross-org correlation, digests only (lexical)
+## 2. Fuzzy vs exact matching on shared source material (lexical)
 
-`eval/*` (see `_scratch`): random 40k HackAPrompt split into two "orgs" (A, B), each
+> **This is not a cross-org rate.** An earlier version of this section was titled
+> "cross-org correlation", which overclaimed. A and B below are random halves of *one*
+> high-redundancy competition corpus, so they already share wording heavily. What this
+> measures is the **exact-vs-fuzzy gap on closely-related material** — a real and useful
+> result, but the easiest possible case. For genuinely independent feeds see §2b.
+
+`eval/*` (see `_scratch`): random 40k HackAPrompt split into two halves (A, B), each
 holding ~15.9k unique prompts. Sharing **only digests** (not raw prompts); near-duplicate
 clustering by LSH (16 bands × 8 rows over the 128-perm digest):
 
-| method | Org-A prompts found in Org B |
+| method | A-half prompts found in B-half |
 |---|---|
 | exact match (verbatim) | 12.2% |
-| digest (near-duplicate) | **35.1%** (2.9x) |
+| digest (near-duplicate) | **35.1%** |
 
-The digest finds **~23 percentage points** more cross-org overlap than exact matching —
-reworded variants exact matching misses — while exchanging only fingerprints. (Caveat:
-A/B are random splits of one high-redundancy corpus, so this shows the exact-vs-digest
-gap on shared source material, not a universal rate; a genuinely cross-corpus test is
-future work.)
+The digest finds **~23 percentage points** more overlap than exact matching — the reworded
+variants exact matching misses — while exchanging only fingerprints. That ratio (~2.9x)
+describes this split, not what two independent organisations would see.
+
+## 2b. Cross-feed correlation across five independent feeds
+
+The honest cross-org test: five feeds collected by different people for different purposes,
+each standing in for an organisation. Matched cap of 2,000 prompts per feed for **both**
+passes, seed 0, deduplicated within each feed first. Rates are "share of feed-A prompts
+that have a match in feed B", so both directions are reported (denominators differ).
+
+Distinct prompts after within-feed dedup: hackaprompt 1,808 · wildjailbreak 2,000 ·
+in-the-wild 1,336 · advbench 520 · harmbench 200.
+
+### Controls first
+
+Without these, "we found no overlap" is indistinguishable from "the pipeline was broken".
+
+| control | result | reads as |
+|---|---|---|
+| **lexical positive** — 300 prompts vs lightly reworded copies (1 word in 10 dropped) | digest recovers **45.3%**, exact match **0.7%** | LSH is wired correctly and does catch rewording; it also bounds tolerance — moderate rewording already costs over half the recall |
+| **semantic positive** — 300 WildJailbreak `vanilla`↔`adversarial` pairs (known same intent) | median cosine **0.765**; **29.0%** reach ≥0.80; **0.7%** reach ≥0.90 | ≥0.80 is *stricter* than a typical true pair, so the rates below are a **lower bound**; ≥0.90 is near-useless as a threshold |
+| **null baseline** — 20k random cross-feed pairs | median **0.551**, p99 0.718, p99.9 0.768, max 0.870; only **0.025%** reach ≥0.80 | ≥0.80 sits far above the noise floor, so hits are not chance |
+
+### Lexical: essentially zero
+
+Across all ten feed pairs, both directions, exact-match and digest near-duplicate rates are
+**0.00%** — with a single exception, hackaprompt ↔ in-the-wild at **0.06% / 0.07%**.
+
+Independent feeds share almost no *wording*. The lexical digest, which is purely a wording
+method, therefore finds nothing across feeds. Given the positive control above, this is a
+property of the data, not a bug.
+
+### Semantic: depends entirely on whether feeds share lineage or subject matter
+
+Share of feed-A prompts with a feed-B neighbour at cosine ≥0.80 (bge-small):
+
+| feed pair | A→B | B→A | why |
+|---|---|---|---|
+| advbench ↔ harmbench | 39.2% | 28.5% | **shared lineage** — HarmBench's standard behaviours are "modeled after ... AdvBench and the TDC 2023 Red Teaming Track" ([HarmBench §4.1](https://arxiv.org/abs/2402.04249)) |
+| wildjailbreak ↔ in-the-wild | 12.1% | 25.5% | **shared lineage** — WildJailbreak is built by applying "2-7 randomly sampled In-the-Wild jailbreak tactics" ([dataset card](https://huggingface.co/datasets/allenai/WildJailbreak), [WildTeaming](https://arxiv.org/abs/2406.18510)) |
+| **hackaprompt ↔ in-the-wild** | **10.5%** | **20.9%** | **independent** — a 2023 competition vs jailbreaks scraped from the open web; no shared construction |
+| advbench ↔ wildjailbreak | 1.5% | 8.9% | partial — WildJailbreak's vanilla queries are harmful requests like AdvBench's |
+| harmbench ↔ wildjailbreak | 0.5% | 4.0% | partial, same reason |
+| hackaprompt ↔ wildjailbreak | 0.7% | 0.6% | independent, different artifact types |
+| in-the-wild ↔ advbench | 0.2% | 0.6% | different artifact types |
+| in-the-wild ↔ harmbench | 0.1% | 0.5% | different artifact types |
+| hackaprompt ↔ advbench | 0.0% | 0.0% | different artifact types |
+| hackaprompt ↔ harmbench | 0.0% | 0.0% | different artifact types |
+
+### What this means
+
+- **Lexical cross-feed correlation is ~0.** Don't expect a wording-based digest to correlate
+  anything across organisations that didn't copy from each other.
+- **The genuine cross-org semantic signal is ~10–21%** (hackaprompt ↔ in-the-wild) — two
+  independently assembled collections of real human jailbreak attempts from the same era.
+  That is a real, non-trivial result, and because ≥0.80 is stricter than a typical true pair
+  it is a floor rather than a ceiling.
+- **The two largest overlaps are lineage, not discovery.** AdvBench/HarmBench and
+  WildJailbreak/in-the-wild each overlap because one was built from the other. They are
+  useful as *positive controls* — they confirm the method detects real overlap — but quoting
+  them as cross-org correlation would repeat the mistake §2 used to make.
+- **Artifact type dominates.** Feeds of *jailbreak wrappers* (hackaprompt, in-the-wild) and
+  feeds of *bare harmful requests* (advbench, harmbench) barely correlate at all, regardless
+  of provenance. Correlating across organisations only makes sense between feeds that collect
+  the same kind of thing.
+
+Reproduce: `_scratch_crossfeed_final.py` (not shipped — three of the five feeds are gated
+HuggingFace datasets requiring individually accepted terms).
 
 ## 3. Same-attack matching (semantic) — ceiling vs shipping digest
 
@@ -183,9 +271,16 @@ meaningful alongside those identifiers — see the versioning note in the README
 - **Lexical digest (`plm1`)** — proven for near-duplicate correlation: removes >half of a
   real corpus as exact duplicates, catches typos/rewording, order-sensitive. Cheap, offline,
   dependency-free.
-- **Cross-org correlation** — the digest finds ~2.9x what exact matching does on shared
-  source material, exchanging only digests rather than raw prompt text (data
-  minimisation, not a formal privacy guarantee — see the README).
+- **Fuzzy vs exact, same corpus** — on two halves of one corpus the digest finds ~23
+  percentage points more overlap than exact matching (35.1% vs 12.2%), exchanging only
+  digests rather than raw prompt text (data minimisation, not a formal privacy guarantee —
+  see the README). This is the easy case, not a cross-org rate.
+- **Cross-feed correlation is conditional, and lexically ~zero.** Across five independent
+  feeds the lexical digest finds essentially nothing (≤0.07%) — independent feeds don't share
+  wording. Semantically, the genuine cross-org signal is **~10–21%** between two independently
+  collected corpora of real human jailbreaks; the two larger overlaps (39% and 25%) are
+  datasets built from one another, so they serve as positive controls rather than findings.
+  Feeds that collect different *kinds* of artifact barely correlate at all. See §2b.
 - **Semantic digest (`pls1`/`pls1c`)** — recovers the majority of heavily-reworded attacks
   (0din centered ~0.71 recall@1 at N=400; clean general model ~0.61), beating the lexical
   baseline but trailing the full-embedding ceiling by 11–21 points — the cost of a 32-byte

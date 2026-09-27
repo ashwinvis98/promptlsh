@@ -8,6 +8,33 @@ All notable changes to `promptlsh` are recorded here. The format follows
 > not be comparable to one produced by another. From 1.0.0, any incompatible change to a
 > digest's bytes will come with a new scheme tag (`plm2`, ...), never a silent change.
 
+## [Unreleased]
+### Changed
+- **Corrected a published claim: RESULTS §2 is no longer presented as "cross-org
+  correlation".** The ~2.9x figure is real but was measured on two random halves of a
+  *single* high-redundancy corpus (HackAPrompt), which share wording by construction. It
+  measures the exact-vs-fuzzy gap on closely-related material, not a cross-organisation
+  rate. §2 is retitled and explicitly scoped; the number itself is unchanged.
+- Added a **corrections log** to `RESULTS.md` so changes to published figures are visible
+  rather than silently rewritten.
+
+### Added
+- **RESULTS §2b — genuine cross-feed correlation** across five independently collected
+  public feeds (HackAPrompt, WildJailbreak, in-the-wild/Shen et al., AdvBench, HarmBench)
+  at a matched 2,000-prompt cap, reported as rates in both directions.
+  - Lexical cross-feed correlation is **~0** (≤0.07%): independent feeds don't share wording.
+  - Genuine cross-org semantic signal is **~10–21%** (HackAPrompt ↔ in-the-wild).
+  - The two larger overlaps — AdvBench↔HarmBench (28–39%) and WildJailbreak↔in-the-wild
+    (12–25%) — are datasets built from one another, so they act as positive controls, not
+    findings.
+  - Feeds collecting different *artifact types* (jailbreak wrappers vs bare harmful
+    requests) barely correlate regardless of provenance.
+- **Controls for §2b**, so "no overlap" is distinguishable from "broken pipeline": a lexical
+  positive control (45.3% recovery on lightly reworded copies vs 0.7% exact), a semantic
+  positive control on known same-intent pairs (median cosine 0.765 — meaning the ≥0.80
+  threshold is *stricter* than a typical true pair, so reported rates are a lower bound), and
+  a 20k-pair null baseline (median 0.551; only 0.025% of random pairs reach ≥0.80).
+
 ## [0.3.1] - 2026-08-16
 
 ### Fixed
