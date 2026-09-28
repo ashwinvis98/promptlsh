@@ -23,6 +23,16 @@ prompt-injection duplicate detection). Runner: `fastembed` / `onnxruntime` (no t
 
 Changes to previously published figures or framing, newest first.
 
+- **2026-09-27 — §3 is now reproducible from this repo.** The int8-quant comparison — the
+  measurement this library's own digest loses — was previously computed by an uncommitted
+  scratch script, so the central number could not be reproduced from what was published,
+  despite this section telling readers to look in `eval/`. It is now `eval/wire_formats.py`,
+  with fixed seeds. Re-running it reproduces every `bge-small` figure exactly. No number
+  changed; the reproducibility claim was the defect.
+- **2026-09-27 — §6 gains a measured result.** Word-reorder robustness of the *semantic*
+  digest had never been measured, only assumed. It is now: `plm1` falls to 0.001 under word
+  shuffling while `pls1` holds an implied cosine of 0.881.
+
 - **2026-08-20 — §2 reframed; §2b added.** §2 was titled "Cross-org correlation, digests
   only" and reported that the digest finds ~2.9x the overlap of exact matching. That number is
   real but the label was wrong: A and B were random halves of a *single* high-redundancy
@@ -259,6 +269,12 @@ meaningful alongside those identifiers — see the versioning note in the README
   specific.
 - **By perturbation:** insert 0.49, delete 0.44, substitute 0.37, **reorder 0.004** —
   word-shingles are order-sensitive; reshuffling evades the lexical digest entirely.
+- **The semantic digest does not share that weakness.** `eval/wire_formats.py` shuffles the
+  word order of 300 real prompts and compares each to its own shuffle: `plm1` similarity
+  falls to **0.001** (median 0.000), while `pls1` holds **0.843 bit agreement** — an implied
+  cosine of **0.881** against a raw-embedding cosine of 0.885. Word reordering is a one-line
+  evasion of the lexical digest and very nearly a no-op against the semantic one. This is a
+  third reason to ship `pls1`/`pls1c`, alongside size and reduced invertibility.
 - **num_perm:** mean similarity is stable ~0.38 regardless; variance falls as perms rise
   (stdev 0.137 → 0.101 from 32 → 256). The shipping default is **128** (lower-variance
   estimates); 64 halves the digest size at the cost of higher variance, with diminishing
@@ -298,10 +314,23 @@ meaningful alongside those identifiers — see the versioning note in the README
 
 ```bash
 pip install -e . && pip install promptlsh[fastembed]   # or [onnx] for the domain model
+
+# S1 - corpus redundancy
 python eval/cluster_corpus.py hackaprompt.parquet --column user_input
+
+# S3 - the size/fidelity table (all five wire formats) + reorder robustness.
+# Fixed seeds, so it reproduces exactly. WildJailbreak is gated: accept its terms first.
+python eval/wire_formats.py
+python eval/wire_formats.py --with-0din     # adds the domain-tuned model (~1 GB download, slow on CPU)
+
+# S4/S5 - category separation and centering
 python eval/family_recovery.py labelled.csv --text-col Goal --label-col Category --semantic
 python eval/semantic_eval.py
 ```
+
+Verified on 2026-09-27 by re-running `eval/wire_formats.py` from a clean checkout: the
+`bge-small` row reproduces exactly (ceiling 0.767, int8 0.767, `pls1` 0.560, `pls1c` 0.613,
+`plm1` 0.537 at N=400; int8 minus ceiling = +0.000).
 
 ## Credits & prior art
 
