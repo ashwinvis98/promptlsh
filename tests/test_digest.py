@@ -7,6 +7,7 @@ from promptlsh import (
     LexicalHasher,
     SemHasher,
     digest,
+    digest_plm1,
     parse_digest,
     similarity_text,
 )
@@ -76,8 +77,9 @@ def test_digest_is_deterministic():
     assert digest(_S1) == digest(_S1)
 
 
-def test_digest_is_pinned_across_versions():
-    assert digest(_S1) == _PINNED_S1_DIGEST
+def test_plm1_digest_is_pinned_across_versions():
+    # plm1 is frozen. digest() now emits plm2, so this asserts against digest_plm1.
+    assert digest_plm1(_S1) == _PINNED_S1_DIGEST
 
 
 def test_digest_round_trips():
@@ -87,7 +89,9 @@ def test_digest_round_trips():
 
 
 def test_digest_format():
-    assert digest(_S1).startswith("plm1:128:")
+    # the default scheme is plm2, which carries num_perm, shingle_size and seed
+    assert digest(_S1).startswith("plm2:128:3:1:")
+    assert digest_plm1(_S1).startswith("plm1:128:")
 
 
 def test_parse_rejects_foreign_digest():

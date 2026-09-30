@@ -37,25 +37,26 @@ from promptlsh.digest import (  # noqa: E402
     _DEFAULT_SHINGLE,
     _MAX_HASH,
     _MERSENNE,
-    _SCHEME,
+    _SCHEME_V1,
+    _SCHEME_V2,
+    _UNSEGMENTED_RE,
     LexicalHasher,
     _base_hash,
     _coeff,
-    _shingles,
-    normalize,
+    _shingles_canon,
+    canonicalise,
+    tokenise,
 )
 
-OUT = pathlib.Path(__file__).resolve().parent / "vectors" / "plm1.json"
+VEC_DIR = pathlib.Path(__file__).resolve().parent / "vectors"
 
 
-def path_taken(text: str) -> str:
-    """Which branch of _shingles handled this input. Mirrors the spec's decision order."""
-    from promptlsh.digest import _UNSEGMENTED_RE
-
-    if _UNSEGMENTED_RE.search(text or ""):
+def path_taken(canon: str, k: int) -> str:
+    """Which branch of the shingler handled this input. Mirrors the spec's decision order."""
+    if _UNSEGMENTED_RE.search(canon or ""):
         return "char-ngram (unsegmented script)"
-    toks = normalize(text)
-    if len(toks) >= _DEFAULT_SHINGLE:
+    toks = tokenise(canon)
+    if len(toks) >= k:
         return "word-shingle"
     if toks:
         return "word-shingle (single, fewer tokens than k)"
@@ -133,11 +134,14 @@ CASES: list[tuple[str, str, str, int, int, int]] = [
 ]
 
 
-def build() -> dict:
+def build(scheme: str) -> dict:
     vectors = []
     for vid, desc, text, num_perm, shingle, seed in CASES:
-        h = LexicalHasher(num_perm=num_perm, shingle_size=shingle, seed=seed)
-        sh = _shingles(text, shingle)
+        h = LexicalHasher(num_perm=num_perm, shingle_size=shingle, seed=seed, scheme=scheme)
+        canon = canonicalise(text, scheme)
+        sh = _shingles_canon(canon, shingle)
+        dg = h.digest(text)
+        n_header = 2 if scheme == _SCHEME_V1 else 4
         vectors.append({
             "id": vid,
             "description": desc,
@@ -147,24 +151,36 @@ def build() -> dict:
             "input_utf8_hex": text.encode("utf-8").hex(),
             "input_display": text,
             "params": {"num_perm": num_perm, "shingle_size": shingle, "seed": seed},
-            "tokens": normalize(text),
-            "shingle_path": path_taken(text),
+            "canonical_codepoints": [ord(c) for c in canon],
+            "tokens": tokenise(canon),
+            "shingle_path": path_taken(canon, shingle),
             "shingle_count": len(sh),
             "shingles_sorted": sorted(sh),
-            "digest": h.digest(text),
-            "all_zero": set(h.digest(text).split(":")[2:]) == {"00000000"},
+            "digest": dg,
+            "all_zero": set(dg.split(":")[n_header:]) == {"00000000"},
         })
 
+    canon_rule = (
+        "case fold only (LEGACY, defective - see known_defects)" if scheme == _SCHEME_V1
+        else "NFKC -> drop category Cf -> case fold -> NFKC"
+    )
+    wire = (
+        "plm1:<num_perm>:<hex>..." if scheme == _SCHEME_V1
+        else "plm2:<num_perm>:<shingle_size>:<seed>:<hex>..."
+    )
     return {
-        "scheme": _SCHEME,
+        "scheme": scheme,
+        "status": "legacy, frozen" if scheme == _SCHEME_V1 else "current",
         "purpose": (
             "Conformance vectors for the promptlsh lexical digest. An independent "
             "implementation is conformant when, for every vector, it reproduces 'digest' "
             "exactly from 'input_codepoints' under 'params'. See SPEC-digest.md."
         ),
         "normative_spec": "SPEC-digest.md",
+        "wire_format": wire,
+        "canonicalisation": canon_rule,
         "constants": {
-            "scheme_tag": _SCHEME,
+            "scheme_tag": scheme,
             "default_num_perm": _DEFAULT_NUM_PERM,
             "default_shingle_size": _DEFAULT_SHINGLE,
             "default_seed": 1,
@@ -186,42 +202,84 @@ def build() -> dict:
             "a[0:3] for seed=1": [str(x) for x in LexicalHasher()._a[:3]],
             "b[0:3] for seed=1": [str(x) for x in LexicalHasher()._b[:3]],
         },
-        "known_defects": [
+        "known_defects": _DEFECTS_V1 if scheme == _SCHEME_V1 else [],
+        "fixes_relative_to_plm1": [] if scheme == _SCHEME_V1 else [
             {
                 "id": "no-unicode-normalisation",
-                "summary": (
-                    "Input is case-folded but not Unicode-normalised, so NFC and NFD forms "
-                    "of identical visible text yield different digests."
-                ),
+                "fix": "NFKC normalisation, applied before and after case folding so the "
+                       "result is idempotent.",
                 "vectors": ["nfc-french", "nfd-french"],
-                "severity": "breaks the format's core promise of cross-party comparability",
+                "expected": "these two vectors now produce the SAME digest",
             },
             {
                 "id": "format-characters-split-tokens",
-                "summary": (
-                    "Zero-width and other default-ignorable characters are not stripped, so "
-                    "inserting one splits a token and moves the digest at no cost."
-                ),
-                "vectors": ["zwsp-injected"],
-                "severity": "cheap evasion",
+                "fix": "Characters in Unicode category Cf are removed during canonicalisation.",
+                "vectors": ["ascii-baseline", "zwsp-injected"],
+                "expected": "these two vectors now produce the SAME digest",
+            },
+            {
+                "id": "unexpressed-parameters",
+                "fix": "shingle_size and seed are carried on the wire, so digests built with "
+                       "different parameters are rejected instead of scored.",
+                "vectors": ["ascii-baseline", "shingle-2", "seed-7"],
+                "expected": "comparing across these raises ValueError",
             },
         ],
         "vectors": vectors,
     }
 
 
+_DEFECTS_V1 = [
+    {
+        "id": "no-unicode-normalisation",
+        "summary": (
+            "Input is case-folded but not Unicode-normalised, so NFC and NFD forms "
+            "of identical visible text yield different digests."
+        ),
+        "vectors": ["nfc-french", "nfd-french"],
+        "severity": "breaks the format's core promise of cross-party comparability",
+        "fixed_in": "plm2",
+    },
+    {
+        "id": "format-characters-split-tokens",
+        "summary": (
+            "Zero-width and other default-ignorable characters are not stripped, so "
+            "inserting one splits a token and moves the digest at no cost."
+        ),
+        "vectors": ["zwsp-injected"],
+        "severity": "cheap evasion",
+        "fixed_in": "plm2",
+    },
+    {
+        "id": "unexpressed-parameters",
+        "summary": (
+            "shingle_size and seed are not carried on the wire, so digests built with "
+            "different parameters parse cleanly and compare to a plausible wrong number."
+        ),
+        "vectors": ["ascii-baseline", "shingle-2", "seed-7"],
+        "severity": "silently wrong comparisons",
+        "fixed_in": "plm2",
+    },
+]
+
+
 def main() -> None:
-    data = build()
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"wrote {OUT.relative_to(OUT.parents[2])}  ({OUT.stat().st_size / 1024:.1f} KB)")
-    print(f"  {len(data['vectors'])} vectors")
-    paths: dict[str, int] = {}
-    for v in data["vectors"]:
-        paths[v["shingle_path"]] = paths.get(v["shingle_path"], 0) + 1
-    for p, n in sorted(paths.items()):
-        print(f"    {n:>2}  {p}")
-    print(f"  {len(data['known_defects'])} known defects pinned")
+    VEC_DIR.mkdir(parents=True, exist_ok=True)
+    for scheme in (_SCHEME_V1, _SCHEME_V2):
+        data = build(scheme)
+        out = VEC_DIR / f"{scheme}.json"
+        out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        print(f"wrote tests/vectors/{out.name}  ({out.stat().st_size / 1024:.1f} KB)  "
+              f"{len(data['vectors'])} vectors  [{data['status']}]")
+        paths: dict[str, int] = {}
+        for v in data["vectors"]:
+            paths[v["shingle_path"]] = paths.get(v["shingle_path"], 0) + 1
+        for p, n in sorted(paths.items()):
+            print(f"      {n:>2}  {p}")
+        if data["known_defects"]:
+            print(f"      {len(data['known_defects'])} defects pinned")
+        if data["fixes_relative_to_plm1"]:
+            print(f"      {len(data['fixes_relative_to_plm1'])} fixes recorded")
 
 
 if __name__ == "__main__":

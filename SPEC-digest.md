@@ -1,30 +1,56 @@
 # promptlsh digest specification
 
-**Scheme:** `plm1` (promptlsh lexical, version 1) · **Status:** stable, with two known
-defects recorded below · **Conformance vectors:** [`tests/vectors/plm1.json`](tests/vectors/plm1.json)
+**Current scheme:** `plm2` · **Legacy scheme:** `plm1` (frozen)
+**Conformance vectors:** [`tests/vectors/plm2.json`](tests/vectors/plm2.json) ·
+[`tests/vectors/plm1.json`](tests/vectors/plm1.json)
 
-This document is normative. It specifies `plm1` in enough detail to reimplement in any
+This document is normative. It specifies both schemes in enough detail to reimplement in any
 language and produce byte-identical digests. Where this document and the Python code
 disagree, that is a bug in one of them — the conformance vectors decide.
 
+**Emit `plm2`. Parse `plm1`.** `plm1` exists only so digests already in circulation stay
+readable; it must not be used for new ones. The differences are in
+[§5 Canonicalisation](#5-canonicalisation) and [§2 Wire format](#2-wire-format), and the
+reasons are in [§10](#10-plm1-defects-fixed-in-plm2).
+
 **Why this document exists.** The point of a similarity digest is that two parties compute
 one independently and compare the results. That promise is only worth anything if a second
-implementation can be shown to agree, and until this spec existed the only evidence was a
-single pinned digest inside a Python test, for one pure-ASCII input at default settings.
+implementation can be shown to agree, and before this spec the only evidence was a single
+pinned digest inside a Python test, for one pure-ASCII input at default settings.
 [0DIN's `prompt-toolkit`](https://github.com/0din-ai/prompt-toolkit) set the bar here by
 publishing pseudocode and vectors; this is `promptlsh` meeting it.
 
-Writing it down surfaced a real defect that the old single-vector test could not have caught.
-See [Known defects](#known-defects). Read that section before you rely on cross-party
-comparison.
+Writing it surfaced three defects in `plm1` that the old single-vector test could not have
+caught — one of which, the missing Unicode normalisation, defeated the format's entire
+purpose on five of eight languages tested. `plm2` fixes all three. The measurements are kept
+in [§10](#10-plm1-defects-fixed-in-plm2) rather than deleted, because they are the argument
+for why the break was worth it.
+
+### Scheme summary
+
+| | `plm1` | `plm2` |
+|---|---|---|
+| Status | legacy, frozen | **current** |
+| Canonicalisation | case fold only | NFKC → strip `Cf` → case fold → NFKC |
+| NFC vs NFD comparable | **no** — 0.000 for Korean, Vietnamese | yes, all cases |
+| Zero-width injection | **moves the digest** (0.414) | ignored |
+| Carries `shingle_size`, `seed` | no — silently wrong comparisons possible | yes, mismatches raise |
+| Python | `digest_plm1(text)` | `digest(text)` |
 
 ---
 
 ## 1. Conformance
 
-An implementation is **conformant** when, for every entry in
-[`tests/vectors/plm1.json`](tests/vectors/plm1.json), it reproduces the `digest` field
-exactly from `input_codepoints` under the given `params`.
+An implementation is **conformant** for a scheme when, for every entry in that scheme's vector
+file, it reproduces the `digest` field exactly from `input_codepoints` under the given `params`.
+
+- [`tests/vectors/plm2.json`](tests/vectors/plm2.json) — 27 vectors. Required.
+- [`tests/vectors/plm1.json`](tests/vectors/plm1.json) — the same 27 inputs under the legacy
+  scheme. Only needed if you must read existing `plm1` digests.
+
+The two files cover identical inputs, which makes the diff between them exactly the behavioural
+change `plm2` introduces. Both record `canonical_codepoints` per vector, so a mismatch can be
+localised to canonicalisation before you go hunting in the hash.
 
 Read the input from `input_codepoints` (an array of integer Unicode scalar values), not from
 `input_display`. Two of the vectors differ only in Unicode composition, and a JSON library or
@@ -42,14 +68,24 @@ specific stage instead of leaving you with a wrong digest and no idea why.
 
 ## 2. Wire format
 
+**`plm2` (emit this):**
+
+```
+plm2:<num_perm>:<shingle_size>:<seed>:<slot>:<slot>:...:<slot>
+```
+
+**`plm1` (parse only):**
+
 ```
 plm1:<num_perm>:<slot>:<slot>:...:<slot>
 ```
 
 | Field | Definition |
 |---|---|
-| `plm1` | Literal scheme tag, lowercase. |
+| scheme tag | Literal `plm1` or `plm2`, lowercase. |
 | `<num_perm>` | Decimal count of slots, no padding. Default `128`. |
+| `<shingle_size>` | **`plm2` only.** Decimal `k`. Default `3`. |
+| `<seed>` | **`plm2` only.** Decimal seed. Default `1`. |
 | `<slot>` | One MinHash slot, lowercase hex, **zero-padded to exactly 8 characters**, most significant nibble first. Exactly `num_perm` of these. |
 
 Separator is `:` throughout. No whitespace. No trailing separator.
@@ -57,6 +93,11 @@ Separator is `:` throughout. No whitespace. No trailing separator.
 A parser MUST reject a digest whose declared `num_perm` does not equal the number of slots
 present, rather than comparing it as a shorter digest. Truncation is otherwise silent and
 produces a plausible-looking similarity score.
+
+`plm2` carries `shingle_size` and `seed` because `plm1` did not, and their absence was a
+defect in its own right: two `plm1` digests built with different `k` or a different seed have
+the same shape, parse cleanly, and compare to a low-but-plausible number with no way to detect
+the mismatch. See [§10.3](#103-parameters-were-not-on-the-wire).
 
 The two embedding-backed schemes are out of scope for this document and are specified in the
 README: `pls1:<model_id>:<n_bits>:<hex>` and `pls1c:<model_id>:<ref_id>:<n_bits>:<hex>`. They
@@ -69,11 +110,12 @@ fixture.
 
 | Parameter | Default | Effect on comparability |
 |---|---|---|
-| `num_perm` | `128` | Digests with different `num_perm` are **not comparable**. Comparison MUST raise, not coerce. |
-| `shingle_size` (`k`) | `3` | Different `k` produces different shingle sets. Not comparable, and **not detectable from the digest** — see §9. |
-| `seed` | `1` | Selects the permutation family. Different seed, different digest. Also not encoded in the digest. |
+| `num_perm` | `128` | Digests with different `num_perm` are **not comparable**. Comparison MUST raise, not coerce. Detectable in both schemes from the slot count. |
+| `shingle_size` (`k`) | `3` | Different `k` produces different shingle sets. **`plm2`:** on the wire, mismatch raises. **`plm1`:** not encoded, mismatch is silent. |
+| `seed` | `1` | Selects the permutation family. **`plm2`:** on the wire, mismatch raises. **`plm1`:** not encoded, mismatch is silent. |
 
-Only `num_perm` appears on the wire. This is a limitation, recorded in §9.
+All three appear on the wire in `plm2`. Only `num_perm` does in `plm1`, which is defect
+[§10.3](#103-parameters-were-not-on-the-wire).
 
 ---
 
@@ -93,23 +135,41 @@ Only `num_perm` appears on the wire. This is a limitation, recorded in §9.
 
 ## 5. Canonicalisation
 
-Apply **Unicode case folding** (`str.casefold()` in Python; full case folding, not simple
-lowercase) to the input string. Nothing else.
+**This is the only step where the two schemes differ.** Everything from §6 onward operates on
+the canonical string and is identical for both.
 
-In particular, `plm1` does **NOT**:
+### 5.1 `plm2` — four steps, in this order
 
-- apply any Unicode normalisation form (NFC, NFD, NFKC, NFKD);
-- strip format characters (category `Cf`: zero-width space, soft hyphen, word joiner);
-- strip or fold combining marks (category `Mn`).
+1. **NFKC** normalise.
+2. **Remove** every character whose General_Category is `Cf` (format characters: zero-width
+   space, zero-width non-joiner, word joiner, soft hyphen, BOM, and the rest).
+3. **Case fold** (full Unicode case folding, not lowercase).
+4. **NFKC** normalise again.
 
-Both omissions are defects, not design choices. See [Known defects](#known-defects). They are
-specified here because a conformant implementation must reproduce current behaviour exactly;
-they are not endorsed.
+Step 4 is not redundant, and omitting it is the most likely way a reimplementation diverges
+here. Case folding can *denormalise*: it maps some characters to sequences that are themselves
+not in NFKC. Without the second pass, `canon(canon(x)) != canon(x)` for a handful of inputs,
+and any party that happened to normalise at a different point in its own pipeline would
+disagree. Idempotence is asserted in the test suite over a spread of scripts and edge cases.
 
-> Implementation note: full case folding is not the same as lowercasing. `ß` case-folds to
+NFKC rather than NFC is deliberate: it folds compatibility variants that are visually
+equivalent and trivially interchangeable by an attacker — fullwidth forms, ligatures, Roman
+numeral characters, superscripts. The cost is that a few distinctions are lost, which for a
+similarity digest is the right trade.
+
+### 5.2 `plm1` — case fold only
+
+Apply **Unicode case folding** and nothing else. In particular `plm1` does **NOT** apply any
+normalisation form, does not strip `Cf`, and does not fold combining marks (`Mn`).
+
+These are defects, not design choices — see [§10](#10-plm1-defects-fixed-in-plm2). They are
+specified exactly because a conformant implementation must reproduce `plm1` byte-for-byte to
+read existing digests. They are not endorsed, and `plm1` must not be emitted for new digests.
+
+> Implementation note, both schemes: full case folding is not lowercasing. `ß` case-folds to
 > `ss`, and `ﬁ` (U+FB01) folds to `fi`. A reimplementation using a locale-sensitive
-> `toLowerCase` will diverge. Use a Unicode full case-folding routine with no locale
-> tailoring.
+> `toLowerCase` will diverge — Turkish dotless i is the classic failure. Use a Unicode full
+> case-folding routine with no locale tailoring.
 
 ---
 
@@ -270,7 +330,10 @@ the implementation returns a zero-filled signature directly and does not run the
 ### 8.4 Serialisation
 
 ```
-"plm1" + ":" + decimal(num_perm) + ":" + join(":", [lowercase_hex8(slot[i])])
+plm2:  "plm2" + ":" + decimal(num_perm) + ":" + decimal(shingle_size) + ":"
+              + decimal(seed) + ":" + join(":", [lowercase_hex8(slot[i])])
+
+plm1:  "plm1" + ":" + decimal(num_perm) + ":" + join(":", [lowercase_hex8(slot[i])])
 ```
 
 ---
@@ -295,22 +358,31 @@ whitespace-only input. Treating it as comparable would make every degenerate inp
 1.0 with every other. `similarity` therefore returns `0.0`, including when comparing an
 all-zero digest with itself. That is deliberate: "non-comparable", not "identical".
 
-**What the digest does not carry.** `shingle_size` and `seed` are not encoded. Two digests
-built with different `k` or different seeds have the same shape, parse cleanly, and compare
-to a low-but-plausible number. There is no way to detect this from the digests alone. If you
-exchange digests across an organisational boundary, publish `k` and `seed` alongside them, or
-agree to use the defaults and nothing else. This is the weakest point in the format's
-comparability story after the defects below, and the fix — folding both into the scheme tag —
-is a breaking change deferred to the next scheme revision.
+**Comparability is checked, not assumed.** An implementation MUST raise rather than return a
+number when two digests are not comparable:
+
+```
+different scheme tag      -> raise
+different num_perm        -> raise   (detectable in both schemes)
+different shingle_size    -> raise   (plm2 only; plm1 cannot detect it)
+different seed            -> raise   (plm2 only; plm1 cannot detect it)
+```
+
+If you are still exchanging `plm1` digests, publish `k` and `seed` out of band or stick to the
+defaults, because the format cannot tell you when they disagree. That limitation is the reason
+`plm2` exists — see [§10.3](#103-parameters-were-not-on-the-wire).
 
 ---
 
-## 10. Known defects
+## 10. `plm1` defects, fixed in `plm2`
 
-Both are pinned by conformance vectors and by tests in `tests/test_conformance.py`, so fixing
-either one makes tests **fail loudly** rather than silently changing every digest in
-circulation. That is intentional: a fix here is a wire-format break and must bump the scheme
-tag to `plm2`.
+All three are pinned by conformance vectors in both files: `plm1.json` asserts they are still
+**present** (it is frozen, and drifting would break existing digests), `plm2.json` asserts they
+are **gone**. `tests/test_conformance.py` enforces both directions, so neither scheme can move
+silently.
+
+The measurements are kept rather than deleted because they are the justification for breaking
+a published wire format.
 
 ### 10.1 No Unicode normalisation — breaks cross-party comparability
 
@@ -347,9 +419,9 @@ wording or meaning.
 The test suite could not have caught this. That is the specific argument for shipping vectors
 that span scripts rather than one convenient string.
 
-**Mitigation until `plm2`:** normalise to NFC yourself before calling `digest()`, and require
-every party you exchange digests with to do the same. That restores comparability but is an
-out-of-band agreement, which is exactly what a wire format is supposed to remove.
+**Fixed in `plm2`** by normalising NFKC (§5.1). All eight languages above now compare at
+1.000. No out-of-band agreement is needed, which is the point of putting it in the format
+rather than in a README.
 
 ### 10.2 Format characters are not stripped — cheap evasion
 
@@ -364,27 +436,55 @@ anywhere in `previous`:
 | U+2060 WORD JOINER | 0.414 |
 | U+00AD SOFT HYPHEN | 0.414 |
 
-A ~59% similarity drop from a character that does not render. This is a known limitation of
-lexical digests generally rather than a coding error — the README is already explicit that
-`plm1` is not adversarially robust — but it is specified here so nobody has to discover it
-experimentally.
+A ~59% similarity drop from a character that does not render.
 
-### 10.3 Recommended fix, deferred
+**Fixed in `plm2`** by removing category `Cf` during canonicalisation (§5.1). All four cases
+above now compare at 1.000.
 
-A `plm2` scheme should canonicalise as: **NFKC normalise → strip category `Cf` → case
-fold**, and fold `shingle_size` and `seed` into the scheme tag so that non-comparable digests
-are non-parseable rather than quietly wrong.
+This does not make `plm2` adversarially robust, and nothing here should be read as claiming
+that. A lexical digest still falls to synonym substitution, word reordering, and structural
+rewrites. Stripping invisible characters closes one specific free evasion; it does not close
+the category.
 
-This is a breaking change to a published format, so it is a deliberate decision rather than a
-patch. `plm1` parsing and comparison would be retained for digests already in circulation.
+### 10.3 Parameters were not on the wire
+
+`plm1` encodes only `num_perm`. Two `plm1` digests built with different `shingle_size` or a
+different `seed` have identical shape, parse without error, and compare to a low-but-plausible
+number. There is no way to detect the mismatch from the digests alone, so the failure is
+silent — the worst kind for a format whose job is telling two parties whether they saw the
+same thing.
+
+**Fixed in `plm2`**, which carries both. A mismatch now raises rather than returning a number:
+
+| Comparison | `plm1` | `plm2` |
+|---|---|---|
+| different `num_perm` | raises (slot count differs) | raises |
+| different `shingle_size` | **returns a number** | raises |
+| different `seed` | **returns a number** | raises |
+| across schemes | — | raises |
+
+### 10.4 What is still not fixed
+
+- **Not adversarially robust.** See above. Reordering, synonyms and paraphrase all defeat a
+  lexical digest; that is what the `pls1` semantic scheme is for.
+- **`num_perm` still sets the error floor.** MinHash error is roughly `1/sqrt(num_perm)`,
+  about 8.8 points at 128 slots. Not a defect, but do not present digest similarity as precise.
+- **No conformance vectors for `pls1`/`pls1c`.** They depend on a floating-point embedding, so
+  byte-exact reproducibility across runtimes may not be achievable; the honest version is
+  vectors plus a tolerance, and that is not written yet.
 
 ---
 
 ## 11. Versioning
 
-Bump the scheme tag (`plm1` → `plm2`) for **any** change that alters the digest of any input:
-canonicalisation, tokenisation, shingling, hash functions, coefficient derivation, slot
+Bump the scheme tag (next would be `plm3`) for **any** change that alters the digest of any
+input: canonicalisation, tokenisation, shingling, hash functions, coefficient derivation, slot
 arithmetic, or serialisation.
+
+`plm1` → `plm2` is the worked example. The trigger was a defect that defeated the format's
+purpose, the old scheme was kept parseable, both schemes got vector files asserting opposite
+things about the same inputs, and the measurements justifying the break were kept in §10 rather
+than tidied away. Do that again next time.
 
 Changing default parameter values is also a break in practice, because almost every digest in
 existence uses the defaults.
@@ -402,6 +502,11 @@ In rough order of how often each one is the actual bug:
 
 - [ ] Token character class written out as Unicode categories, **not** `\w` (§6)
 - [ ] Full Unicode case folding, not `toLowerCase` (§5)
+- [ ] **`plm2`: NFKC applied twice — before AND after case folding** (§5.1). Skipping the
+      second pass gives a non-idempotent canonical form and silent disagreement.
+- [ ] **`plm2`: category `Cf` removed** before tokenisation (§5.1)
+- [ ] **`plm2`: `shingle_size` and `seed` serialised in the header** (§2)
+- [ ] Comparison raises on any parameter mismatch rather than scoring it (§9)
 - [ ] `a[i] * hs` computed without 64-bit overflow (§8.3)
 - [ ] Slot initial value `2^32 - 1`, but empty shingle set returns all **zeros** (§8.3)
 - [ ] Unsegmented-script check runs against the **original** string, before folding (§7.1)

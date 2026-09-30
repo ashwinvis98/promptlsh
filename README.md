@@ -97,16 +97,25 @@ the digest size at the cost of higher variance.
 
 **Reimplementing this, or checking that your implementation agrees with mine?** The format is
 specified normatively in **[SPEC-digest.md](SPEC-digest.md)**, with language-neutral
-conformance vectors in [`tests/vectors/plm1.json`](tests/vectors/plm1.json). Start with the
+conformance vectors in [`tests/vectors/`](tests/vectors/) — 27 for each scheme, covering the
+same inputs. Start with the
 [reimplementation checklist](SPEC-digest.md#12-reimplementation-checklist) — it lists the
 traps in the order they actually bite, and the first one (`\w` is ASCII-only in Go and
 JavaScript) will silently give you a different digest in most languages.
 
-⚠️ **Read [Known defects](SPEC-digest.md#10-known-defects) before relying on cross-party
-comparison.** `plm1` case-folds but does not Unicode-normalise, so NFC and NFD encodings of
-the same visible text produce different digests — measured at 0.000 similarity for Korean and
-Vietnamese, 0.18–0.24 for French, German and Spanish. Pure ASCII is unaffected, which is why
-it went unnoticed. Normalise to NFC yourself before calling `digest()` until `plm2` lands.
+**Two schemes. Emit `plm2`, parse `plm1`.** `digest()` returns `plm2`:
+
+```
+plm2:<num_perm>:<shingle_size>:<seed>:<hex>:...
+```
+
+`plm1` is frozen and reachable via `digest_plm1()`, for reading digests already in circulation
+only. It applied no Unicode normalisation, so NFC and NFD encodings of the same visible text
+produced different digests — 0.000 similarity for Korean and Vietnamese, 0.18–0.24 for French,
+German and Spanish. It also let one invisible character move the digest, and it did not carry
+`shingle_size` or `seed`, so mismatched parameters compared to a plausible wrong number instead
+of raising. All three are fixed in `plm2`; the measurements are in
+[§10](SPEC-digest.md#10-plm1-defects-fixed-in-plm2).
 
 ## Semantic digest (optional)
 
