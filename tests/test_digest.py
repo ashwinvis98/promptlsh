@@ -18,7 +18,15 @@ _UNRELATED = "The weather in Paris is lovely at this time of year"
 # Pinned output of the default digester (num_perm=128, seed=1, hash-derived coefficients).
 # Do not edit lightly: changing it means the digest is no longer comparable to digests
 # produced by earlier versions. It guards against an accidental algorithm change; it does
-# NOT (and cannot) guard against a deliberate one — bump the scheme tag (ppl2) for that.
+# NOT (and cannot) guard against a deliberate one — bump the scheme tag (plm2) for that.
+#
+# This vector is now ALSO in tests/vectors/plm1.json as "ascii-baseline", which is the
+# authoritative set: 27 vectors covering all four shingler paths, readable by an
+# implementation in any language. See SPEC-digest.md and tests/test_conformance.py.
+#
+# Keeping the copy here is deliberate. Being pure ASCII, it is the one vector that cannot
+# detect the Unicode normalisation defect in SPEC-digest.md §10.1 — which is precisely how
+# that defect survived for so long behind a green test suite.
 _PINNED_S1_DIGEST = (
     "plm1:128:187fa139:1b3c3236:3074e26b:62105d56:689893b7:0673a7cf:66d3b2cd:3aafec4e:"
     "00c8ec96:3b7cb9f6:08823a89:03f6ed43:5810a50c:17be2a4e:2677b28e:0f297a9c:47d9cc32:"

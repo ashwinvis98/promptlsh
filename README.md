@@ -95,6 +95,19 @@ promptlsh compare-digests plm1:128:... plm1:128:...
 Digest format: `plm1:<num_perm>:<hex>:<hex>:...`. The default is 128 slots; 64 halves
 the digest size at the cost of higher variance.
 
+**Reimplementing this, or checking that your implementation agrees with mine?** The format is
+specified normatively in **[SPEC-digest.md](SPEC-digest.md)**, with language-neutral
+conformance vectors in [`tests/vectors/plm1.json`](tests/vectors/plm1.json). Start with the
+[reimplementation checklist](SPEC-digest.md#12-reimplementation-checklist) — it lists the
+traps in the order they actually bite, and the first one (`\w` is ASCII-only in Go and
+JavaScript) will silently give you a different digest in most languages.
+
+⚠️ **Read [Known defects](SPEC-digest.md#10-known-defects) before relying on cross-party
+comparison.** `plm1` case-folds but does not Unicode-normalise, so NFC and NFD encodings of
+the same visible text produce different digests — measured at 0.000 similarity for Korean and
+Vietnamese, 0.18–0.24 for French, German and Spanish. Pure ASCII is unaffected, which is why
+it went unnoticed. Normalise to NFC yourself before calling `digest()` until `plm2` lands.
+
 ## Semantic digest (optional)
 
 The lexical digest only sees shared wording. For paraphrase — same intent, different
@@ -190,6 +203,9 @@ than lexical, with a domain-tuned model and centering helping most.
 - [x] Same-attack matching on WildJailbreak: semantic digest beats lexical; ceiling-vs-digest gap measured. See [RESULTS.md](RESULTS.md).
 - [x] Domain-tuned backend (`backends.onnx_hasher`) + mean-centering calibration (`pls1c`).
 - [x] Inline model/reference-mean identity in the semantic digest string, enforced on compare.
+- [x] Normative digest spec ([SPEC-digest.md](SPEC-digest.md)) + 27 language-neutral conformance vectors covering all four shingler paths.
+- [ ] **`plm2`: canonicalise as NFKC → strip category `Cf` → case fold, and fold `shingle_size`/`seed` into the scheme tag.** Fixes both defects in [§10](SPEC-digest.md#10-known-defects). Breaking change to the wire format, so `plm1` parsing is retained.
+- [ ] Conformance vectors for `pls1`/`pls1c`. Needs a pinned model artifact, not just a text fixture.
 - [ ] Digest carried as a spec-defined property via a STIX 2.1 `extension-definition` (`extension_type: toplevel-property-extension`), rather than the custom `x_promptlsh_digest` property that ships today in adversarial-ai-cti.
 
 ## Relationship to `adversarial-ai-cti`
