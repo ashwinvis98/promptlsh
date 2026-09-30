@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "promptlsh"
-version = "0.3.1"
+version = "0.4.0"
 description = "Fingerprint for prompt attacks: a similarity digest (fuzzy hash) for correlating reworded adversarial prompts."
 readme = "README.md"
 requires-python = ">=3.10"

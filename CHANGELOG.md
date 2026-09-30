@@ -9,6 +9,81 @@ All notable changes to `promptlsh` are recorded here. The format follows
 > digest's bytes will come with a new scheme tag (`plm2`, ...), never a silent change.
 
 ## [Unreleased]
+
+## [0.4.0] - 2026-09-30
+
+### Breaking: `plm2` is the new default lexical scheme
+
+`digest()` now returns **`plm2`**. `plm1` is frozen and reachable via `digest_plm1()` for
+reading digests already in circulation. A `plm2` digest of a given text is **not** the same
+string as its `plm1` digest, and comparing across schemes raises rather than returning a
+number. If you have stored `plm1` digests, keep comparing them with `plm1`; do not mix.
+
+This is the scheme-tag bump the stability note above promises. The digest bytes changed, so
+the tag changed — never silently.
+
+New wire format, which now carries the parameters that affect comparability:
+
+```
+plm2:<num_perm>:<shingle_size>:<seed>:<hex>:...
+```
+
+**Three `plm1` defects fixed, each measured before and after.**
+
+1. **No Unicode normalisation** — the serious one. `plm1` case-folded but applied no
+   normalisation form, so NFC and NFD encodings of visually identical text produced different
+   digests. Combining marks are Unicode category `Mn`, which is not a word character, so
+   tokens split at every accent: `précédentes` became `['pre','ce','dentes']`.
+
+   | NFC vs NFD | `plm1` | `plm2` |
+   |---|---|---|
+   | Korean, Vietnamese | **0.000** | 1.000 |
+   | Spanish | 0.180 | 1.000 |
+   | French | 0.219 | 1.000 |
+   | German | 0.242 | 1.000 |
+   | Hindi, Arabic, ASCII | 1.000 | 1.000 |
+
+   Five of eight languages tested were not comparable across encodings — on text that is
+   character-for-character identical on screen. For a format whose entire purpose is two
+   parties computing comparable digests, that defeated the premise. It was also a free
+   evasion: send NFD, defeat an NFC index, one function call, no change to wording or meaning.
+
+   Pure ASCII is unaffected, which is why a single ASCII test vector never caught it.
+
+2. **Format characters not stripped** — one zero-width space inside a word dropped similarity
+   to 0.414. `plm2` removes category `Cf`; all four tested invisible characters (ZWSP, ZWNJ,
+   word joiner, soft hyphen) now compare at 1.000. This does **not** make the digest
+   adversarially robust — reordering, synonyms and paraphrase still defeat it.
+
+3. **`shingle_size` and `seed` were not on the wire** — digests built with different
+   parameters parsed cleanly and compared to a plausible wrong number, undetectably. `plm2`
+   carries both and raises on mismatch.
+
+`plm2` canonicalises **NFKC, strip category `Cf`, case fold, NFKC again**. The second NFKC pass
+is load-bearing: case folding can denormalise, so without it the canonical form is not
+idempotent and two parties normalising at different points in their own pipelines would
+disagree.
+
+### Added in 0.4.0
+- **`SPEC-digest.md` — a normative specification** for both schemes: wire format,
+  canonicalisation, tokenisation by Unicode category, the shingler's four-branch decision
+  order, base hash, coefficient derivation, slot arithmetic, comparison contract, versioning
+  policy, a reimplementation checklist, and the measurements behind the break. The token class
+  is specified as `Lu Ll Lt Lm Lo Nd Nl No` plus U+005F — verified exhaustively over every
+  Unicode scalar value — rather than as `\w`, because `\w` is ASCII-only in Go by default and
+  in JavaScript always.
+- **Language-neutral conformance vectors**: `tests/vectors/plm2.json` and
+  `tests/vectors/plm1.json`, 27 each over the same inputs, covering all four shingler paths.
+  Inputs are stored as codepoint arrays so a normalising JSON layer cannot corrupt the two
+  vectors that differ only in Unicode composition. Each vector records its canonical form,
+  tokens and shingles, so a reimplementation mismatch localises to a stage rather than leaving
+  you with a wrong digest and no clue why.
+- `canonicalise()`, `tokenise()`, `parse_digest_full()` and `digest_plm1()` are now public.
+- `tests/make_vectors.py` regenerates both vector files.
+
+### Changed in 0.4.0
+- `plm1`'s vector file asserts its three defects are **still present** (it is frozen and must
+  not drift); `plm2`'s asserts they are **gone**. Neither scheme can move silently.
 ### Changed
 - **Corrected a published claim: RESULTS §2 is no longer presented as "cross-org
   correlation".** The ~2.9x figure is real but was measured on two random halves of a
